@@ -1,33 +1,27 @@
 import os
-from groq import Groq
 import streamlit as st
+from groq import Groq
 
-# ---- HCI: basic page setup ----
+# ---- Page Setup ----
 st.set_page_config(
-    page_title="Smart Calculator (Groq-powered)",
+    page_title="Smart Calculator 🧮",
     page_icon="🧮",
-    layout="centered"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 st.title("🧮 Smart Calculator")
-st.caption("A simple, beginner-friendly calculator with AI explanations (Groq LLM).")
+st.caption("A beginner-friendly calculator with AI explanations.")
 
-st.markdown(
-    """
-    ### How to use
-    1. Enter two numbers.
-    2. Choose an operation.
-    3. Click **Calculate** to see the result.
-    4. (Optional) Click **Explain with AI** to get a step-by-step explanation.
+# ---- Session State ----
+if "history" not in st.session_state:
+    st.session_state["history"] = []  # list of dicts: {expression, result}
 
-    ---
-    """
-)
+if "last_calc" not in st.session_state:
+    st.session_state["last_calc"] = None
 
-# ---- Helper functions ----
-
+# ---- Helper Functions ----
 def create_groq_client():
-    """Create a Groq client using the API key from environment variable."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         return None, "GROQ_API_KEY is missing. Set it in Colab secrets and environment."
@@ -38,109 +32,115 @@ def create_groq_client():
         return None, f"Error creating Groq client: {e}"
 
 def calculate(a, b, op_label):
-    """Perform the selected arithmetic operation."""
-    if op_label == "Add (+)":
-        return a + b, "+"
-    elif op_label == "Subtract (-)":
-        return a - b, "-"
-    elif op_label == "Multiply (×)":
-        return a * b, "×"
-    elif op_label == "Divide (÷)":
-        if b == 0:
-            raise ZeroDivisionError("Cannot divide by zero.")
+    if op_label == "Add (+)": return a + b, "+"
+    if op_label == "Subtract (-)": return a - b, "-"
+    if op_label == "Multiply (×)": return a * b, "×"
+    if op_label == "Divide (÷)":
+        if b == 0: raise ZeroDivisionError("Cannot divide by zero.")
         return a / b, "÷"
+    if op_label == "Power (a^b)": return a ** b, "^"
+    if op_label == "Percentage (a% of b)": return (a / 100) * b, "% of"
+    raise ValueError("Unknown operation selected.")
+
+def add_to_history(expression, result):
+    st.session_state["history"].insert(0, {"expression": expression, "result": result})
+    st.session_state["history"] = st.session_state["history"][:10]
+
+# ---- Sidebar: History ----
+with st.sidebar:
+    st.header("📜 Calculation History")
+    if st.session_state["history"]:
+        for item in st.session_state["history"]:
+            st.write(f"{item['expression']} = **{item['result']}**")
     else:
-        raise ValueError("Unknown operation selected.")
+        st.info("No calculations yet.")
+    if st.button("🧹 Clear history"):
+        st.session_state["history"] = []
+        st.experimental_rerun()
 
-# ---- UI: Calculator Section (HCI: clear layout & controls) ----
+# ---- Tabs for UI Sections ----
+tab1, tab2, tab3 = st.tabs(["🧮 Basic Calculator", "🤖 AI Explanation", "📝 Natural Language Calculator"])
 
-st.header("1️⃣ Basic Calculator")
+# ---- Tab 1: Basic Calculator ----
+with tab1:
+    st.subheader("1️⃣ Basic Calculator")
+    col1, col2 = st.columns(2)
+    with col1:
+        num1 = st.number_input("First number", value=0.0, format="%.6f")
+    with col2:
+        num2 = st.number_input("Second number", value=0.0, format="%.6f")
 
-col1, col2 = st.columns(2)
+    operation = st.selectbox("Choose operation", [
+        "Add (+)", "Subtract (-)", "Multiply (×)", "Divide (÷)", "Power (a^b)", "Percentage (a% of b)"
+    ])
+    if st.button("✅ Calculate"):
+        try:
+            result, symbol = calculate(num1, num2, operation)
+            expression = f"{num1} {symbol} {num2}" if symbol != "% of" else f"{num1}% of {num2}"
+            st.success(f"Result: {expression} = {result}")
+            st.session_state["last_calc"] = {"num1": num1, "num2": num2, "symbol": symbol, "result": result, "expression": expression}
+            add_to_history(expression, result)
+        except ZeroDivisionError as zde:
+            st.error(f"⚠️ {zde}")
+            st.session_state["last_calc"] = None
+        except Exception as e:
+            st.error(f"Unexpected error: {e}")
+            st.session_state["last_calc"] = None
 
-with col1:
-    num1 = st.number_input("First number", value=0.0, format="%.6f")
-with col2:
-    num2 = st.number_input("Second number", value=0.0, format="%.6f")
+# ---- Tab 2: AI Explanation ----
+with tab2:
+    st.subheader("2️⃣ Ask Groq to Explain the Last Calculation")
+    if st.session_state["last_calc"] is None:
+        st.info("Perform a calculation first to get AI explanation.")
+    else:
+        lc = st.session_state["last_calc"]
+        default_prompt = f"Explain step by step how to compute {lc['expression']} to get {lc['result']}. Use simple language."
+        user_prompt = st.text_area("Optional: customize your question", value=default_prompt, height=120)
+        if st.button("🤖 Explain with AI"):
+            client, err = create_groq_client()
+            if err:
+                st.error(f"❌ {err}")
+            else:
+                with st.spinner("Asking Groq to explain..."):
+                    try:
+                        chat_completion = client.chat.completions.create(
+                            messages=[{"role": "user", "content": user_prompt}],
+                            model="llama-3.3-70b-versatile"
+                        )
+                        explanation = chat_completion.choices[0].message.content
+                        st.subheader("AI Explanation")
+                        st.write(explanation)
+                    except Exception as e:
+                        st.error(f"Error while contacting Groq: {e}")
 
-operation = st.radio(
-    "Choose operation",
-    ["Add (+)", "Subtract (-)", "Multiply (×)", "Divide (÷)"],
-    horizontal=True
-)
-
-calc_button = st.button("✅ Calculate")
-
-if "last_calc" not in st.session_state:
-    st.session_state["last_calc"] = None
-
-if calc_button:
-    try:
-        result, symbol = calculate(num1, num2, operation)
-        st.success(f"Result: {num1} {symbol} {num2} = {result}")
-        # Store last calculation in session state for AI explanation
-        st.session_state["last_calc"] = {
-            "num1": num1,
-            "num2": num2,
-            "symbol": symbol,
-            "result": result,
-        }
-    except ZeroDivisionError as zde:
-        st.error(f"⚠️ {zde}")
-        st.session_state["last_calc"] = None
-    except Exception as e:
-        st.error(f"Unexpected error: {e}")
-        st.session_state["last_calc"] = None
-
-st.divider()
-
-# ---- UI: AI Explanation Section (Groq) ----
-
-st.header("2️⃣ Ask Groq to Explain the Calculation")
-
-if st.session_state["last_calc"] is None:
-    st.info("First perform a calculation above, then you can ask Groq to explain it.")
-else:
-    lc = st.session_state["last_calc"]
-    default_prompt = (
-        f"Explain step by step how to compute {lc['num1']} {lc['symbol']} {lc['num2']} "
-        f"to get {lc['result']}. Use simple language for a beginner."
-    )
-
-    user_prompt = st.text_area(
-        "Optional: customize the question you want to ask the AI",
-        value=default_prompt,
-        height=120
-    )
-
-    explain_button = st.button("🤖 Explain with AI (Groq)")
-
-    if explain_button:
-        client, err = create_groq_client()
-        if err:
-            st.error(f"❌ {err}")
+# ---- Tab 3: Natural Language Calculator ----
+with tab3:
+    st.subheader("3️⃣ Natural Language Calculator (AI)")
+    st.write("Type a math question in plain English. The AI will solve it and explain.")
+    nl_question = st.text_input("Your question:", value="What is 12 divided by 3 plus 4?", placeholder="Type a math question...")
+    if st.button("🧠 Ask AI to Calculate"):
+        if not nl_question.strip():
+            st.warning("Please enter a question first.")
         else:
-            with st.spinner("Asking Groq to explain..."):
-                try:
-                    # Your exact Groq usage pattern
-                    chat_completion = client.chat.completions.create(
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": user_prompt,
-                            }
-                        ],
-                        model="llama-3.3-70b-versatile",
-                    )
+            client, err = create_groq_client()
+            if err:
+                st.error(f"❌ {err}")
+            else:
+                with st.spinner("Asking Groq to solve..."):
+                    try:
+                        prompt = (
+                            "You are a careful math tutor. Solve the following math question, "
+                            "then give the final numeric answer and explain it step by step in simple language.\n\n"
+                            f"Question: {nl_question}"
+                        )
+                        chat_completion = client.chat.completions.create(
+                            messages=[{"role": "user", "content": prompt}],
+                            model="llama-3.3-70b-versatile"
+                        )
+                        answer_text = chat_completion.choices[0].message.content
+                        st.subheader("AI Answer")
+                        st.write(answer_text)
+                    except Exception as e:
+                        st.error(f"Error while contacting Groq: {e}")
 
-                    explanation = chat_completion.choices[0].message.content
-                    st.subheader("AI Explanation")
-                    st.write(explanation)
-
-                except Exception as e:
-                    st.error(f"Error while contacting Groq: {e}")
-
-st.caption(
-    "Designed with basic HCI principles: clear labels, immediate feedback, simple layout, "
-    "and helpful error messages."
-)
+st.caption("Designed with clean layout, visible history, friendly messages, and step-by-step AI explanations.")
